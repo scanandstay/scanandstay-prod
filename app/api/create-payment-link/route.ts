@@ -28,9 +28,11 @@ export async function POST(req: NextRequest) {
 
     // Checkout Session — two line items:
     // 1. Solde 50% (one-time)
-    // 2. Premier mois d'abonnement (one-time, activation manuelle ensuite dans Stripe Dashboard)
+    // 2. Premier mois d'abonnement (one-time)
+    // Payment method saved for future recurring subscription (SEPA or card)
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
+      payment_method_types: ['card', 'sepa_debit'],
       line_items: [
         {
           price_data: {
@@ -60,9 +62,13 @@ export async function POST(req: NextRequest) {
       invoice_creation: { enabled: true },
       payment_intent_data: {
         description: `ScanAndStay — Solde + abonnement — ${establishmentName}`,
+        // Save payment method for future recurring SEPA/card subscription
+        setup_future_usage: 'off_session',
         metadata: {
           clientName: clientName || '',
+          clientEmail: clientEmail || '',
           establishmentName: establishmentName || '',
+          monthlyAmount: String(monthlyAmount),
           type: 'solde_abonnement',
         },
       },

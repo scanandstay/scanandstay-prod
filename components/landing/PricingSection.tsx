@@ -1,8 +1,8 @@
 'use client'
 
-import { useRef } from 'react'
-import { motion, useInView } from 'framer-motion'
-import { Check, Star } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { motion, useInView, AnimatePresence } from 'framer-motion'
+import { Check, Star, X, TrendingUp, BarChart2, FileText } from 'lucide-react'
 import Link from 'next/link'
 
 const plans = [
@@ -54,12 +54,90 @@ const plans = [
   },
 ]
 
+function PricingModal({ onClose }: { onClose: () => void }) {
+  return (
+    <AnimatePresence>
+      <motion.div
+        key="overlay"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-50 flex items-center justify-center px-4"
+        onClick={onClose}
+      >
+        <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+        <motion.div
+          key="modal"
+          initial={{ opacity: 0, scale: 0.94, y: 16 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.94, y: 16 }}
+          transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+          className="relative bg-white rounded-2xl shadow-2xl max-w-sm w-full p-7 z-10"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={onClose}
+            className="absolute top-4 right-4 p-1.5 rounded-lg text-stone-400 hover:text-stone-600 hover:bg-stone-100 transition-colors"
+          >
+            <X size={16} />
+          </button>
+
+          <p className="text-forest-600 text-[10px] font-bold tracking-widest uppercase mb-1">Bientôt disponible</p>
+          <h3 className="font-serif text-xl font-bold text-forest-900 mb-2">Fonctionnalités à venir</h3>
+          <p className="text-sm text-stone-500 mb-6 leading-relaxed">
+            L&apos;abonnement mensuel financera le développement continu de votre guide. Voici ce qui arrive prochainement :
+          </p>
+
+          <ul className="flex flex-col gap-4 mb-6">
+            <li className="flex items-start gap-3">
+              <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-forest-50 flex items-center justify-center">
+                <TrendingUp size={15} className="text-forest-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-forest-900">Statistiques de scans QR</p>
+                <p className="text-xs text-stone-400 leading-relaxed mt-0.5">Visualisez combien de fois votre guide est consulté, depuis quel pays, à quelle heure.</p>
+              </div>
+            </li>
+            <li className="flex items-start gap-3">
+              <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-forest-50 flex items-center justify-center">
+                <BarChart2 size={15} className="text-forest-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-forest-900">Analyse des sections</p>
+                <p className="text-xs text-stone-400 leading-relaxed mt-0.5">Découvrez quelles sections (WiFi, restaurants, activités…) intéressent le plus vos voyageurs.</p>
+              </div>
+            </li>
+            <li className="flex items-start gap-3">
+              <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-forest-50 flex items-center justify-center">
+                <FileText size={15} className="text-forest-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-forest-900">Rapport mensuel</p>
+                <p className="text-xs text-stone-400 leading-relaxed mt-0.5">Un email récapitulatif chaque mois avec les tendances et suggestions d&apos;amélioration.</p>
+              </div>
+            </li>
+          </ul>
+
+          <button
+            onClick={onClose}
+            className="w-full py-2.5 rounded-xl bg-forest-800 text-white text-sm font-semibold hover:bg-forest-700 transition-colors"
+          >
+            Compris
+          </button>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  )
+}
+
 export default function PricingSection() {
   const ref = useRef(null)
   const isInView = useInView(ref, { once: true, margin: '-60px 0px' })
+  const [modalOpen, setModalOpen] = useState(false)
 
   return (
     <section ref={ref} className="py-20 px-5 bg-white">
+      {modalOpen && <PricingModal onClose={() => setModalOpen(false)} />}
       <div className="max-w-3xl mx-auto">
         <motion.div
           initial={{ opacity: 0, y: 28 }}
@@ -109,9 +187,20 @@ export default function PricingSection() {
                     {plan.price}
                   </p>
                   {plan.monthly && (
-                    <p className={`text-xs ${plan.highlight ? 'text-forest-300' : 'text-stone-400'}`}>
-                      {plan.monthly}
-                    </p>
+                    <>
+                      <p className={`text-xs ${plan.highlight ? 'text-forest-300' : 'text-stone-400'}`}>
+                        {plan.monthly}
+                      </p>
+                      <p className={`text-[10px] mt-0.5 ${plan.highlight ? 'text-forest-400' : 'text-stone-300'}`}>
+                        Tarif susceptible d&apos;évoluer —{' '}
+                        <button
+                          onClick={() => setModalOpen(true)}
+                          className={`underline underline-offset-2 cursor-pointer ${plan.highlight ? 'text-forest-300 hover:text-white' : 'text-stone-400 hover:text-forest-600'} transition-colors`}
+                        >
+                          En savoir plus
+                        </button>
+                      </p>
+                    </>
                   )}
                 </div>
               </div>

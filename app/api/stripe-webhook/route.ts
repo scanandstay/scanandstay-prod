@@ -141,6 +141,84 @@ export async function POST(req: NextRequest) {
 
     try {
       const session = event.data.object as Stripe.Checkout.Session
+      console.log('[webhook] session.mode:', session.mode)
+
+      // ── 5a. Mode setup — domiciliation SEPA ──────────────────────────────
+      if (session.mode === 'setup') {
+        console.log('[webhook] Handling SEPA setup session')
+        const m = (session.metadata ?? {}) as Record<string, string>
+
+        try {
+          const setupIntentId = typeof session.setup_intent === 'string'
+            ? session.setup_intent
+            : session.setup_intent?.id ?? null
+
+          if (!setupIntentId) {
+            console.error('[webhook] setup_intent missing from session')
+          } else {
+            const setupIntent = await stripe.setupIntents.retrieve(setupIntentId)
+            console.log('[webhook] SetupIntent status:', setupIntent.status)
+
+            const paymentMethodId = typeof setupIntent.payment_method === 'string'
+              ? setupIntent.payment_method
+              : setupIntent.payment_method?.id ?? null
+
+            const customerId = typeof session.customer === 'string'
+              ? session.customer
+              : session.customer?.id ?? null
+
+            console.log('[webhook] SEPA paymentMethodId:', paymentMethodId, '— customerId:', customerId)
+
+            if (paymentMethodId && customerId) {
+              // Attacher le PM au customer et le définir par défaut
+              await stripe.paymentMethods.attach(paymentMethodId, { customer: customerId })
+              await stripe.customers.update(customerId, {
+                invoice_settings: { default_payment_method: paymentMethodId },
+              })
+              console.log('[webhook] SEPA payment method attached to customer:', customerId)
+
+              const monthlyAmountCents = Math.round(Number(m.monthlyAmount || 0) * 100)
+
+              if (monthlyAmountCents > 0) {
+                // Créer le prix récurrent
+                const price = await stripe.prices.create({
+                  currency: 'eur',
+                  unit_amount: monthlyAmountCents,
+                  recurring: { interval: 'month' },
+                  product_data: {
+                    name: `Abonnement ScanAndStay — ${m.establishmentName || 'Guide'}`,
+                  },
+                })
+
+                // Créer l'abonnement — commence immédiatement
+                const subscription = await stripe.subscriptions.create({
+                  customer: customerId,
+                  items: [{ price: price.id }],
+                  default_payment_method: paymentMethodId,
+                  collection_method: 'charge_automatically',
+                  metadata: {
+                    clientName: m.clientName || '',
+                    clientEmail: m.clientEmail || '',
+                    establishmentName: m.establishmentName || '',
+                    source: 'sepa_setup',
+                  },
+                })
+                console.log('[webhook] SEPA subscription created:', subscription.id, '— status:', subscription.status)
+              } else {
+                console.warn('[webhook] monthlyAmount missing or zero — subscription not created')
+              }
+            } else {
+              console.error('[webhook] Missing paymentMethodId or customerId for SEPA setup')
+            }
+          }
+        } catch (sepaErr) {
+          console.error('[webhook] SEPA setup handler error:', sepaErr instanceof Error ? sepaErr.stack : JSON.stringify(sepaErr))
+        }
+
+        return NextResponse.json({ received: true })
+      }
+
+      // ── 5b. Mode payment — logique existante ─────────────────────────────
       console.log('[webhook] session object type:', typeof session)
 
       const m = (session.metadata ?? {}) as Record<string, string>
@@ -170,7 +248,79 @@ export async function POST(req: NextRequest) {
         console.error('[webhook] NO CLIENT EMAIL FOUND — full metadata dump:', JSON.stringify(m))
       }
 
-      // ── 6. Send emails via Resend ──
+      // ── 6. Auto-create monthly subscription for admin payment links ──
+      if (m.type === 'solde_abonnement' && stripe) {
+        console.log('[webhook] Detected admin payment link — attempting auto-subscription creation')
+        try {
+          const paymentIntent = session.payment_intent
+            ? await stripe.paymentIntents.retrieve(String(session.payment_intent))
+            : null
+
+          const paymentMethodId = paymentIntent
+            ? (typeof paymentIntent.payment_method === 'string'
+                ? paymentIntent.payment_method
+                : paymentIntent.payment_method?.id ?? null)
+            : null
+
+          console.log('[webhook] paymentMethodId:', paymentMethodId ?? 'NOT FOUND')
+
+          const subEmail = m.clientEmail || clientEmail
+          const monthlyAmountCents = Math.round(Number(m.monthlyAmount || 0) * 100)
+
+          if (paymentMethodId && subEmail && monthlyAmountCents > 0) {
+            // Create or retrieve Stripe customer
+            const customers = await stripe.customers.list({ email: subEmail, limit: 1 })
+            const customer = customers.data.length > 0
+              ? customers.data[0]
+              : await stripe.customers.create({
+                  email: subEmail,
+                  name: m.clientName || undefined,
+                  metadata: { establishmentName: m.establishmentName || '' },
+                })
+            console.log('[webhook] Stripe customer:', customer.id)
+
+            // Attach payment method to customer
+            await stripe.paymentMethods.attach(paymentMethodId, { customer: customer.id })
+            await stripe.customers.update(customer.id, {
+              invoice_settings: { default_payment_method: paymentMethodId },
+            })
+            console.log('[webhook] Payment method attached to customer')
+
+            // Create monthly subscription (start billing in 30 days)
+            const trialEnd = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60
+
+            // Create the recurring price inline (SDK type workaround via price creation)
+            const price = await stripe.prices.create({
+              currency: 'eur',
+              unit_amount: monthlyAmountCents,
+              recurring: { interval: 'month' },
+              product_data: {
+                name: `Abonnement ScanAndStay — ${m.establishmentName || 'Guide'}`,
+              },
+            })
+
+            const subscription = await stripe.subscriptions.create({
+              customer: customer.id,
+              items: [{ price: price.id }],
+              default_payment_method: paymentMethodId,
+              trial_end: trialEnd,
+              collection_method: 'charge_automatically',
+              metadata: {
+                clientName: m.clientName || '',
+                establishmentName: m.establishmentName || '',
+                source: 'admin_payment_link',
+              },
+            })
+            console.log('[webhook] Monthly subscription created:', subscription.id, '— trial ends:', new Date(trialEnd * 1000).toLocaleDateString('fr-BE'))
+          } else {
+            console.warn('[webhook] Skipping subscription creation — missing paymentMethodId, email, or monthlyAmount. paymentMethodId:', paymentMethodId, 'subEmail:', subEmail, 'monthlyAmountCents:', monthlyAmountCents)
+          }
+        } catch (subErr) {
+          console.error('[webhook] Subscription creation failed:', subErr instanceof Error ? subErr.stack : JSON.stringify(subErr))
+        }
+      }
+
+      // ── 7. Send emails via Resend ──
       console.log('[webhook] Checking RESEND_API_KEY…')
       const resendKey = process.env.RESEND_API_KEY
       console.log('[webhook] RESEND_API_KEY present at send time:', !!resendKey)
