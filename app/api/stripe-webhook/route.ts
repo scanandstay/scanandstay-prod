@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Stripe from 'stripe'
 import { Resend } from 'resend'
+import { createServiceClient } from '@/lib/supabase'
 
 // ── Env checks at module load ──
 console.log('[webhook] STRIPE_SECRET_KEY present:', !!process.env.STRIPE_SECRET_KEY)
@@ -248,7 +249,52 @@ export async function POST(req: NextRequest) {
         console.error('[webhook] NO CLIENT EMAIL FOUND — full metadata dump:', JSON.stringify(m))
       }
 
-      // ── 6. Auto-create monthly subscription for admin payment links ──
+      // ── 6. Supabase insert — onboarding orders only ──
+      // type === 'solde_abonnement' → admin payment link → skip
+      if (m.type !== 'solde_abonnement') {
+        console.log('[webhook] Inserting order into Supabase…')
+        try {
+          const serviceSupabase = createServiceClient()
+          if (!serviceSupabase) {
+            console.warn('[webhook] Supabase service client not configured — skipping insert')
+          } else {
+          const { error: insertError } = await serviceSupabase.from('orders').insert({
+            establishment_name: m.establishmentName || null,
+            owner_name:         m.ownerName         || null,
+            client_email:       clientEmail          || null,
+            phone:              m.phone              || null,
+            address:            m.address            || null,
+            offer:              m.offer              || null,
+            languages:          m.languages          || null,
+            total:              Number(m.total)       || null,
+            deposit:            Number(m.deposit)     || null,
+            balance:            (Number(m.total) - Number(m.deposit)) || null,
+            monthly_amount:     null,
+            qr_plates:          Number(m.qrPlates)   || 0,
+            local_research:     m.localResearch      === 'true',
+            activities_research: m.activitiesResearch === 'true',
+            billing_name:        m.billingName        || null,
+            billing_email:       m.billingEmail       || null,
+            billing_address:     m.billingAddress     || null,
+            billing_postal_city: m.billingPostalCity  || null,
+            billing_country:     m.billingCountry     || null,
+            billing_vat:         m.billingVat         || null,
+            status:              'acompte_recu',
+            stripe_session_id:   session.id,
+            deposit_paid_at:     new Date().toISOString(),
+          })
+          if (insertError) {
+            console.error('[webhook] Supabase insert error:', insertError.message)
+          } else {
+            console.log('[webhook] Supabase order inserted OK')
+          }
+          } // end else (serviceSupabase exists)
+        } catch (dbErr) {
+          console.error('[webhook] Supabase insert threw:', dbErr instanceof Error ? dbErr.message : JSON.stringify(dbErr))
+        }
+      }
+
+      // ── 7. Auto-create monthly subscription for admin payment links ──
       if (m.type === 'solde_abonnement' && stripe) {
         console.log('[webhook] Detected admin payment link — attempting auto-subscription creation')
         try {

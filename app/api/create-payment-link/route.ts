@@ -58,6 +58,14 @@ export async function POST(req: NextRequest) {
         },
       ],
       customer_email: clientEmail || undefined,
+      // Session-level metadata — allows webhook to skip Supabase insert for admin links
+      metadata: {
+        type: 'solde_abonnement',
+        clientName: clientName || '',
+        clientEmail: clientEmail || '',
+        establishmentName: establishmentName || '',
+        monthlyAmount: String(monthlyAmount),
+      },
       allow_promotion_codes: true,
       invoice_creation: { enabled: true },
       payment_intent_data: {
